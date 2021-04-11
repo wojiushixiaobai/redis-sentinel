@@ -19,15 +19,18 @@ vi config.conf
 # Redis
 MASTER_HOST=192.168.101.11   # 修改成你需要用作 master 的 redis 服务器 ip
 REDIS_PORT=6379              # Redis 使用的端口
-# 密码请不要使用特殊字符串, 没有做转义
 REDIS_PASSWORD=weakPassword  # Redis 密码
 
 # Redis Sentinel
 SENTINEL_PORT=26379          # Sentinel 使用的端口
+SENTINEL_NAME=mymaster       # 集群名称
+SENTINEL_QUORUM=1            # 集群服务器数量超过 3 个设置为 2
+SENTINEL_NUMREPLICAS=1       # 主备切换时 1 个从节点不可使用
 
 # Keepalived
 INTERFACE=eth0               # 物理网卡名称
 VIP=192.168.101.10           # Keepalived 集群 vip
+VIRTUAL_ROUTER_ID=100        # 同一个局域网多个 Keepalived 集群 id 不可重复
 ```
 
 ### 安装

@@ -114,7 +114,7 @@ function prepare_install() {
 
 function config_redis() {
   if [ "$REDIS_PORT" != "6379" ]; then
-    sed -i "s/port 6379/port $REDIS_PORT/g" /etc/redis.conf
+    sed -i '/^#/!s/port 6379/port '$REDIS_PORT'/g' /etc/redis.conf
   fi
   sed -i "s@bind 127.0.0.1@bind 0.0.0.0@g" /etc/redis.conf
   sed -i "s@protected-mode yes@protected-mode no@g" /etc/redis.conf
@@ -123,18 +123,41 @@ function config_redis() {
   sed -i "s@# repl-timeout 60@repl-timeout 60@g" /etc/redis.conf
   sed -i "s@# repl-ping-replica-period 10@repl-ping-replica-period 10@g" /etc/redis.conf
   sed -i "s@appendonly no@appendonly yes@g" /etc/redis.conf
+  if ! grep -q "maxmemory $REDIS_MAXMEMORY" /etc/redis.conf; then
+    if [ ! "$(cat /etc/redis.conf | grep -v ^\# | grep 'maxmemory ')" ]; then
+      sed -i "s@# maxmemory .*@maxmemory $REDIS_MAXMEMORY@g" /etc/redis.conf
+    else
+      sed -i '/^#/!s@maxmemory .*@maxmemory '$REDIS_MAXMEMORY'@g' /etc/redis.conf
+    fi
+  fi
   if ! grep -q "maxmemory-policy allkeys-lru" /etc/redis.conf; then
-    sed -i "561i maxmemory-policy allkeys-lru" /etc/redis.conf
+    if [ ! "$(cat /etc/redis.conf | grep -v ^\# | grep 'maxmemory-policy ')" ]; then
+      sed -i "s@# maxmemory-policy .*@maxmemory-policy allkeys-lru@g" /etc/redis.conf
+    else
+      sed -i '/^#/!s@maxmemory-policy .*@maxmemory-policy allkeys-lru@g' /etc/redis.conf
+    fi
   fi
   if ! grep -q "requirepass $REDIS_PASSWORD" /etc/redis.conf; then
-    sed -i "481i requirepass $REDIS_PASSWORD" /etc/redis.conf
+    if [ ! "$(cat /etc/redis.conf | grep -v ^\# | grep 'requirepass ')" ]; then
+      sed -i "s@# requirepass .*@requirepass $REDIS_PASSWORD@g" /etc/redis.conf
+    else
+      sed -i '/^#/!s@requirepass .*@requirepass '$REDIS_PASSWORD'@g' /etc/redis.conf
+    fi
   fi
   if ! grep -q "masterauth $REDIS_PASSWORD" /etc/redis.conf; then
-    sed -i "294i masterauth $REDIS_PASSWORD" /etc/redis.conf
+    if [ ! "$(cat /etc/redis.conf | grep -v ^\# | grep 'masterauth ')" ]; then
+      sed -i "s@# masterauth .*@masterauth $REDIS_PASSWORD@g" /etc/redis.conf
+    else
+      sed -i '/^#/!s@masterauth .*@masterauth '$REDIS_PASSWORD'@g' /etc/redis.conf
+    fi
   fi
   if [ "$HOST_IP" != "$MASTER_HOST" ]; then
     if ! grep -q "replicaof $MASTER_HOST $REDIS_PORT" /etc/redis.conf; then
-      sed -i "287i replicaof $MASTER_HOST $REDIS_PORT" /etc/redis.conf
+      if [ ! "$(cat /etc/redis.conf | grep -v ^\# | grep 'replicaof ')" ]; then
+        sed -i "s@# replicaof .*@replicaof $MASTER_HOST $REDIS_PORT@g" /etc/redis.conf
+      else
+        sed -i '/^#/!s@replicaof .*@replicaof '$MASTER_HOST' '$REDIS_PORT'@g' /etc/redis.conf
+      fi
     fi
   fi
 }
@@ -142,13 +165,23 @@ function config_redis() {
 function config_sentinel() {
   sed -i "s@# protected-mode no@protected-mode no@g" /etc/redis-sentinel.conf
   sed -i "s@daemonize no@daemonize yes@g" /etc/redis-sentinel.conf
-  sed -i "s@sentinel monitor mymaster 127.0.0.1 6379 2@sentinel monitor mymaster $MASTER_HOST $REDIS_PORT 1@g" /etc/redis-sentinel.conf
-  sed -i "s@sentinel down-after-milliseconds mymaster 30000@sentinel down-after-milliseconds mymaster 5000@g" /etc/redis-sentinel.conf
-  if ! grep -q "sentinel auth-pass mymaster $REDIS_PASSWORD" /etc/redis-sentinel.conf; then
-    sed -i "104i sentinel auth-pass mymaster $REDIS_PASSWORD" /etc/redis-sentinel.conf
+  if ! grep -q "sentinel monitor $SENTINEL_NAME $MASTER_HOST $REDIS_PORT $SENTINEL_QUORUM" /etc/redis-sentinel.conf; then
+    sed -i '/^#/!s@sentinel monitor .*@sentinel monitor '$SENTINEL_NAME' '$MASTER_HOST' '$REDIS_PORT' '$SENTINEL_QUORUM'@g' /etc/redis-sentinel.conf
   fi
-  if ! grep -q "sentinel parallel-syncs mymaster 1" /etc/redis-sentinel.conf; then
-    sed -i "122i sentinel parallel-syncs mymaster 1" /etc/redis-sentinel.conf
+  sed -i "s@sentinel down-after-milliseconds mymaster 30000@sentinel down-after-milliseconds $SENTINEL_NAME 5000@g" /etc/redis-sentinel.conf
+  if ! grep -q "sentinel auth-pass $SENTINEL_NAME $REDIS_PASSWORD" /etc/redis-sentinel.conf; then
+    if [ ! "$(cat /etc/redis-sentinel.conf | grep -v ^\# | grep 'sentinel auth-pass ')" ]; then
+      sed -i "s@# sentinel auth-pass <master-name> <password>@sentinel auth-pass $SENTINEL_NAME $REDIS_PASSWORD@g" /etc/redis-sentinel.conf
+    else
+      sed -i '/^#/!s@sentinel auth-pass .*@sentinel auth-pass '$SENTINEL_NAME' '$REDIS_PASSWORD'@g' /etc/redis-sentinel.conf
+    fi
+  fi
+  if ! grep -q "sentinel parallel-syncs $SENTINEL_NAME $SENTINEL_NUMREPLICAS" /etc/redis-sentinel.conf; then
+    if  [ ! "$(cat /etc/redis-sentinel.conf | grep -v ^\# | grep 'sentinel parallel-syncs ')" ]; then
+      sed -i "s@# sentinel parallel-syncs .*@sentinel parallel-syncs $SENTINEL_NAME $SENTINEL_NUMREPLICAS@g" /etc/redis-sentinel.conf
+    else
+      sed -i '/^#/!s@sentinel parallel-syncs .*@sentinel parallel-syncs '$SENTINEL_NAME' '$SENTINEL_NUMREPLICAS'@g' /etc/redis-sentinel.conf
+    fi
   fi
 }
 
@@ -164,9 +197,8 @@ global_defs {
 vrrp_script chk_redis {
   script /usr/libexec/keepalived/redis_check.sh
   interval 1
-  timeout 2
   fall 2
-  rise 1
+  rise 2
 }
 
 vrrp_instance redis {
@@ -204,9 +236,10 @@ if [ ! "$(redis-cli -h $REDIS_HOST -p $REDIS_PORT -a $REDIS_PASSWORD info Replic
 fi
 EOF
   sed -i "s@router_id redis@router_id $HOST_IP@g" /etc/keepalived/keepalived.conf
-  sed -i "s@auth_pass weakPassword@auth_pass $REDIS_PASSWORD@g" /etc/keepalived/keepalived.conf
-  sed -i "s@192.168.101.10@$VIP@g" /etc/keepalived/keepalived.conf
   sed -i "s@interface eth0@interface $INTERFACE@g" /etc/keepalived/keepalived.conf
+  sed -i "s@virtual_router_id .*@virtual_router_id $VIRTUAL_ROUTER_ID@g" /etc/keepalived/keepalived.conf
+  sed -i "s@auth_pass .*@auth_pass $REDIS_PASSWORD@g" /etc/keepalived/keepalived.conf
+  sed -i "s@192.168.101.10@$VIP@g" /etc/keepalived/keepalived.conf
   if [ "$HOST_IP" != "$MASTER_HOST" ]; then
     sed -i "s@priority 100@priority 90@g" /etc/keepalived/keepalived.conf
   fi
@@ -295,13 +328,17 @@ function status() {
   redis-cli -h 127.0.0.1 -p $SENTINEL_PORT -a $REDIS_PASSWORD info sentinel 2>/dev//null
 }
 
-function reset() {
+function uninstall() {
   stop
-  yum remove -y keepalived redis redis-sentinel
+  yum remove -y keepalived redis5
   rm -f /etc/redis.conf
   rm -f /etc/redis-sentinel.conf
   rm -f /etc/keepalived/keepalived.conf
   rm -f /usr/libexec/keepalived/redis_check.sh
+}
+
+function reset() {
+  uninstall
   install
 }
 
