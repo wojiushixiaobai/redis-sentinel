@@ -3,7 +3,7 @@
 ## 支持的操作系统
 
 - [x] CentOS 7
-- [ ] CentOS 8
+- [x] CentOS 8
 
 ## 安装方法
 
@@ -16,6 +16,8 @@ cp config_example.conf config.conf
 vi config.conf
 ```
 ```vim
+VERSION=6.2.5                # Redis 版本号
+
 # Redis
 MASTER_HOST=192.168.101.11   # 修改成你需要用作 master 的 redis 服务器 ip
 REDIS_PORT=6379              # Redis 使用的端口

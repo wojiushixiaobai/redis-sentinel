@@ -8,6 +8,8 @@ BASE_DIR=$(cd "$(dirname "$0")";pwd)
 PROJECT_DIR=${BASE_DIR}
 action=$1
 
+cd ${PROJECT_DIR} || exit 1
+
 if [ ! -f "$PROJECT_DIR/config.conf" ]; then
   echo -e "Error: No config file found."
   echo -e "You can run 'cp config_example.conf config.conf', and edit it."
@@ -22,23 +24,8 @@ if [ "x$isRoot" != "x1" ]; then
   exit 1
 fi
 
-if [ -f "/etc/redhat-release" ]; then
-  osVersion=`cat /etc/redhat-release | grep -oE '[0-9]+\.[0-9]+'`
-  majorVersion=`echo $osVersion | awk -F. '{print $1}'`
-  if [ "x$majorVersion" == "x" ]; then
-    echo -e "[\033[31m ERROR \033[0m] 操作系统类型版本不符合要求，请使用 CentOS 7 64 位版本"
-    exit 1
-  else
-    if [[ $majorVersion == 7 ]]; then
-      is64bitArch=`uname -m`
-      if [ "x$is64bitArch" != "xx86_64" ]; then
-        echo -e "[\033[31m ERROR \033[0m] 操作系统必须是 64 位的，32 位的不支持"
-        exit 1
-      fi
-    fi
-  fi
-else
-  echo -e "[\033[31m ERROR \033[0m] 操作系统类型版本不符合要求，请使用 CentOS 7"
+if [ ! -f "/etc/redhat-release" ]; then
+  echo -e "[\033[31m ERROR \033[0m] 操作系统类型版本不符合要求，请使用 CentOS 7/8"
   exit 1
 fi
 
@@ -61,16 +48,11 @@ function prepare_install() {
       curl -o /etc/yum.repos.d/epel.repo https://demo.jumpserver.org/download/centos/7/epel.repo
     fi
   fi
-  if [ ! "$(rpm -qa | grep epel-release )" ]; then
-    yum -y install epel-release
-  fi
-  if [ ! "$(rpm -qa | grep ius-release )" ]; then
-    yum -y install https://repo.ius.io/ius-release-el7.rpm
-  fi
-  if [ ! "$(rpm -qa | grep redis5 )" ]; then
-    yum install -y redis5
-    systemctl enable redis redis-sentinel
-  fi
+  for app in epel-release wget make gcc-c++; do
+    if [ ! "$(rpm -qa | grep ${app} )" ]; then
+      yum -y install ${app}
+    fi
+  done
   if [ ! "$(rpm -qa | grep keepalived )" ]; then
     yum install -y keepalived
     systemctl enable keepalived
@@ -112,14 +94,69 @@ function prepare_install() {
   fi
 }
 
+function install_redis() {
+  if [ ! -d "/usr/local/redis" ]; then
+    if [ ! -d "${PROJECT_DIR}/redis-${VERSION}" ]; then
+      if [ ! -f "${PROJECT_DIR}/redis-${VERSION}.tar.gz" ]; then
+        wget -O "${PROJECT_DIR}/redis-${VERSION}.tar.gz" https://download.redis.io/releases/redis-6.2.5.tar.gz || {
+          rm -f "${PROJECT_DIR}/redis-${VERSION}.tar.gz"
+          echo -e "[\033[31m ERROR \033[0m] redis-${VERSION}.tar.gz 下载失败, 请检查网络或者重试"
+          exit 1
+        }
+      fi
+      tar -xf "${PROJECT_DIR}/redis-${VERSION}.tar.gz" -C "${PROJECT_DIR}" || {
+        rm -rf "${PROJECT_DIR}/redis-${VERSION}.tar.gz" "${PROJECT_DIR}/redis-${VERSION}"
+        echo -e "[\033[31m ERROR \033[0m] redis-${VERSION}.tar.gz 解压失败, 请重试"
+        exit 1
+      }
+    fi
+    cd ${PROJECT_DIR}/redis-${VERSION} || exit 1
+    make || {
+      echo -e "[\033[31m ERROR \033[0m] make 失败, 请检查依赖包是否正常安装"
+      exit 1
+    }
+    make install PREFIX=/usr/local/redis || {
+      rm -rf /usr/local/redis
+      echo -e "[\033[31m ERROR \033[0m] make install 失败, 请根据日志解决错误"
+      exit 1
+    }
+  fi
+  if [ ! -f "/etc/redis.conf" ]; then
+    cp ${PROJECT_DIR}/redis-${VERSION}/redis.conf /etc/redis.conf
+  fi
+  if [ ! -f "/etc/redis-sentinel.conf" ]; then
+    cp ${PROJECT_DIR}/redis-${VERSION}/sentinel.conf /etc/redis-sentinel.conf
+  fi
+  if [ ! -f "/etc/systemd/system/redis.service" ]; then
+    cp ${PROJECT_DIR}/redis.service /etc/systemd/system/redis.service
+  fi
+  if [ ! -f "/etc/systemd/system/redis-sentinel.service" ]; then
+    cp ${PROJECT_DIR}/redis-sentinel.service /etc/systemd/system/redis-sentinel.service
+  fi
+  if [ ! -d "/var/lib/redis" ]; then
+    mkdir -p /var/lib/redis
+  fi
+  if [ ! -d "/var/log/redis" ]; then
+    mkdir -p /var/log/redis
+    echo > /var/log/redis/redis.log
+  fi
+  if ! command -v redis-cli >/dev/null; then
+    \cp -rf /usr/local/redis/bin/redis-cli /usr/bin/
+  fi
+  systemctl daemon-reload
+}
+
 function config_redis() {
   if [ "$REDIS_PORT" != "6379" ]; then
     sed -i '/^#/!s/port 6379/port '$REDIS_PORT'/g' /etc/redis.conf
   fi
-  sed -i "s@bind 127.0.0.1@bind 0.0.0.0@g" /etc/redis.conf
+  sed -i "s@bind 127.0.0.1 .*@bind 0.0.0.0@g" /etc/redis.conf
   sed -i "s@protected-mode yes@protected-mode no@g" /etc/redis.conf
   sed -i "s@daemonize no@daemonize yes@g" /etc/redis.conf
   sed -i "s@supervised no@supervised systemd@g" /etc/redis.conf
+  sed -i "s@pidfile /var/run/redis_6379.pid@pidfile /var/run/redis.pid@g" /etc/redis.conf
+  sed -i 's@logfile ""@logfile /var/log/redis/redis.log@g' /etc/redis.conf
+  sed -i "s@dir ./@dir /var/lib/redis@g" /etc/redis.conf
   sed -i "s@# repl-timeout 60@repl-timeout 60@g" /etc/redis.conf
   sed -i "s@# repl-ping-replica-period 10@repl-ping-replica-period 10@g" /etc/redis.conf
   sed -i "s@appendonly no@appendonly yes@g" /etc/redis.conf
@@ -165,6 +202,7 @@ function config_redis() {
 function config_sentinel() {
   sed -i "s@# protected-mode no@protected-mode no@g" /etc/redis-sentinel.conf
   sed -i "s@daemonize no@daemonize yes@g" /etc/redis-sentinel.conf
+  sed -i 's@logfile ""@logfile /var/log/redis/sentinel.log@g' /etc/redis-sentinel.conf
   if ! grep -q "sentinel monitor $SENTINEL_NAME $MASTER_HOST $REDIS_PORT $SENTINEL_QUORUM" /etc/redis-sentinel.conf; then
     sed -i '/^#/!s@sentinel monitor .*@sentinel monitor '$SENTINEL_NAME' '$MASTER_HOST' '$REDIS_PORT' '$SENTINEL_QUORUM'@g' /etc/redis-sentinel.conf
   fi
@@ -259,6 +297,7 @@ function message() {
 
 function install() {
   prepare_install
+  install_redis
   config_redis
   config_sentinel
   config_keepalived
