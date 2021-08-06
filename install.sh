@@ -144,6 +144,7 @@ function install_redis() {
     \cp -rf /usr/local/redis/bin/redis-cli /usr/bin/
   fi
   systemctl daemon-reload
+  systemctl enable redis redis-sentinel
 }
 
 function config_redis() {
