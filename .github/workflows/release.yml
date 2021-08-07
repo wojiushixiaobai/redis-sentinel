@@ -21,6 +21,7 @@ jobs:
         with:
           tag_name: ${{ github.ref }}
           release_name: ${{ github.ref }}
-          # body: 
+          body: |
+            版本升级 What’s Upgraded
           draft: false
           prerelease: false
